@@ -1,0 +1,13 @@
+#V2
+(contract-call? .community_waste get-name)
+(contract-call? .community_waste get-symbol)
+(contract-call? .community_waste get-total-supply)
+(contract-call? .community_waste register-household)
+(contract-call? .community_waste get-household-info 'ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM)
+(contract-call? .community_waste report-and-pay u5 u1000)
+(contract-call? .community_waste get-household-info 'ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM)
+(contract-call? .community_waste get-total-supply)
+(contract-call? .community_waste get-balance 'ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM)
+(contract-call? .community_waste transfer u10 'ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM 'ST1SJ3DTE5DN7X54YDH5D64R3BCB6A2AG2ZQ8YPD5 none)
+(contract-call? .community_waste get-balance 'ST1SJ3DTE5DN7X54YDH5D64R3BCB6A2AG2ZQ8YPD5)
+::quit
