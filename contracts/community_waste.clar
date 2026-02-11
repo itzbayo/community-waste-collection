@@ -11,6 +11,13 @@
 (define-constant err-not-token-owner (err u101))
 (define-constant err-insufficient-balance (err u102))
 (define-constant err-invalid-amount (err u103))
+(define-constant err-not-registered (err u401))
+(define-constant err-already-registered (err u409))
+(define-constant err-insufficient-contract-balance (err u404))
+
+;; Input validation constants
+(define-constant max-waste-kg u1000000)
+(define-constant max-fee-per-kg u1000000)
 
 ;; Data variables
 (define-data-var total-supply uint u0)
@@ -90,7 +97,7 @@
   (let ((caller tx-sender))
     (begin
       (match (map-get? households {address: caller})
-        some-entry (err u409)  ;; Already registered
+        some-entry err-already-registered
         (begin
           (map-set households {address: caller} {registered: true, waste-count: u0, paid-stx: u0})
           (ok true))))))
@@ -102,10 +109,13 @@
 ;; STX must be attached
 ;; ---------------------------------------------
 (define-public (report-and-pay (waste-kg uint) (fee-per-kg uint))
-  (let (
-        (caller tx-sender)
-        (required-fee (* waste-kg fee-per-kg)))
-    (begin
+  (begin
+    ;; Input validation to ensure data is within acceptable bounds
+    (asserts! (and (> waste-kg u0) (<= waste-kg max-waste-kg)) err-invalid-amount)
+    (asserts! (and (> fee-per-kg u0) (<= fee-per-kg max-fee-per-kg)) err-invalid-amount)
+    (let (
+          (caller tx-sender)
+          (required-fee (* waste-kg fee-per-kg)))
       ;; Must be registered
       (match (map-get? households {address: caller})
         entry
@@ -128,7 +138,7 @@
           (try! (mint-to caller (* waste-kg u10)))
 
           (ok required-fee))
-        (err u401)))))
+        err-not-registered))))
 
 ;; ---------------------------------------------
 ;; Admin function: withdraw collected STX to project account
@@ -138,10 +148,12 @@
 (define-public (withdraw (amount uint))
   (begin
     ;; Only contract deployer can call
-    (asserts! (is-eq tx-sender (var-get contract-owner)) (err u403))
+    (asserts! (is-eq tx-sender (var-get contract-owner)) err-owner-only)
+    ;; Validate amount
+    (asserts! (> amount u0) err-invalid-amount)
     ;; Must have enough STX in contract
     (let ((balance (stx-get-balance (as-contract tx-sender))))
-      (asserts! (>= balance amount) (err u404)))
+      (asserts! (>= balance amount) err-insufficient-contract-balance))
     ;; Transfer
     (try! (as-contract (stx-transfer? amount tx-sender project-account)))
     (ok amount)))
