@@ -1,30 +1,48 @@
 ;; Community Waste Collection Smart Contract
 ;; Implements SIP-010 fungible token standard for SUSTAIN tokens
+;; Enables households to register, report waste, pay collection fees, and earn reward tokens
 
-;; Token constants
+;; ---------------------------------------------
+;; Token Constants
+;; ---------------------------------------------
 (define-constant token-name "SUSTAIN Token")
 (define-constant token-symbol "SUSTAIN")
 (define-constant token-decimals u6)
 
-;; Error constants
+;; ---------------------------------------------
+;; Error Constants
+;; ---------------------------------------------
 (define-constant err-owner-only (err u100))
 (define-constant err-not-token-owner (err u101))
 (define-constant err-insufficient-balance (err u102))
 (define-constant err-invalid-amount (err u103))
+(define-constant err-already-registered (err u409))
+(define-constant err-not-registered (err u401))
+(define-constant err-insufficient-payment (err u402))
+(define-constant err-insufficient-contract-balance (err u404))
 
-;; Data variables
+;; ---------------------------------------------
+;; Data Variables
+;; ---------------------------------------------
 (define-data-var total-supply uint u0)
 (define-data-var total-waste-collected uint u0)
 (define-data-var total-stx-received uint u0)
 (define-data-var contract-owner principal tx-sender)
 
+;; ---------------------------------------------
 ;; Maps
+;; ---------------------------------------------
 (define-map token-balances principal uint)
 
 ;; Map each household to its info: registered, waste-count, paid-stx
 (define-map households
   {address: principal}
   {registered: bool, waste-count: uint, paid-stx: uint})
+
+;; ---------------------------------------------
+;; Project Account for Withdrawals
+;; ---------------------------------------------
+(define-constant project-account 'ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM)
 
 ;; ---------------------------------------------
 ;; SIP-010 Fungible Token Functions
@@ -56,11 +74,14 @@
       (asserts! (>= from-balance amount) err-insufficient-balance)
       (map-set token-balances from (- from-balance amount))
       (let ((to-balance (default-to u0 (map-get? token-balances to))))
-        (map-set token-balances to (+ to-balance amount))))
-    (print memo)
-    (ok true)))
+        (map-set token-balances to (+ to-balance amount)))
+      (print memo)
+      (ok true))))
 
-;; Private function to mint tokens
+;; ---------------------------------------------
+;; Private Helper Functions
+;; ---------------------------------------------
+
 (define-private (mint-to (recipient principal) (amount uint))
   (begin
     (asserts! (> amount u0) err-invalid-amount)
@@ -70,8 +91,9 @@
       (ok true))))
 
 ;; ---------------------------------------------
-;; Public read-only getters
+;; Public Read-Only Getters
 ;; ---------------------------------------------
+
 (define-read-only (get-household-info (addr principal))
   (match (map-get? households {address: addr})
     entry (ok entry)
@@ -83,71 +105,72 @@
 (define-read-only (get-total-stx-received)
   (ok (var-get total-stx-received)))
 
-;; ---------------------------------------------
-;; Registration: add household to system
-;; ---------------------------------------------
-(define-public (register-household)
-  (let ((caller tx-sender))
-    (begin
-      (match (map-get? households {address: caller})
-        some-entry (err u409)  ;; Already registered
-        (begin
-          (map-set households {address: caller} {registered: true, waste-count: u0, paid-stx: u0})
-          (ok true))))))
+(define-read-only (get-contract-owner)
+  (var-get contract-owner))
 
 ;; ---------------------------------------------
-;; Report waste and pay STX
-;; - amount: amount of waste in kg (uint)
-;; - fee-per-kg: fee rate in micro-STX per kg
-;; STX must be attached
+;; Registration: Add household to system
 ;; ---------------------------------------------
+
+(define-public (register-household)
+  (let ((caller tx-sender))
+    (match (map-get? households {address: caller})
+      some-entry err-already-registered
+      (begin
+        (map-set households {address: caller} {registered: true, waste-count: u0, paid-stx: u0})
+        (ok true)))))
+
+;; ---------------------------------------------
+;; Report Waste and Pay STX
+;; - waste-kg: amount of waste in kg (uint)
+;; - fee-per-kg: fee rate in micro-STX per kg
+;; STX must be attached equal to waste-kg * fee-per-kg
+;; ---------------------------------------------
+
 (define-public (report-and-pay (waste-kg uint) (fee-per-kg uint))
   (let (
         (caller tx-sender)
         (required-fee (* waste-kg fee-per-kg)))
-    (begin
-      ;; Must be registered
-      (match (map-get? households {address: caller})
-        entry
-        (begin
-          ;; Transfer STX payment to contract
-          (try! (stx-transfer? required-fee caller (as-contract tx-sender)))
+    (match (map-get? households {address: caller})
+      entry
+      (begin
+        ;; Validate inputs
+        (asserts! (> waste-kg u0) err-invalid-amount)
+        (asserts! (> fee-per-kg u0) err-invalid-amount)
+        
+        ;; Transfer STX payment to contract
+        (try! (stx-transfer? required-fee caller (as-contract tx-sender)))
 
-          ;; Update household record
-          (let (
-               (new-waste (+ (get waste-count entry) waste-kg))
-               (new-paid (+ (get paid-stx entry) required-fee)))
-            (map-set households {address: caller}
-                     {registered: true, waste-count: new-waste, paid-stx: new-paid}))
+        ;; Update household record
+        (let (
+             (new-waste (+ (get waste-count entry) waste-kg))
+             (new-paid (+ (get paid-stx entry) required-fee)))
+          (map-set households {address: caller}
+                   {registered: true, waste-count: new-waste, paid-stx: new-paid}))
 
-          ;; Update globals
-          (var-set total-waste-collected (+ (var-get total-waste-collected) waste-kg))
-          (var-set total-stx-received (+ (var-get total-stx-received) required-fee))
+        ;; Update globals
+        (var-set total-waste-collected (+ (var-get total-waste-collected) waste-kg))
+        (var-set total-stx-received (+ (var-get total-stx-received) required-fee))
 
-          ;; Mint reward tokens equal to waste-kg * 10
-          (try! (mint-to caller (* waste-kg u10)))
+        ;; Mint reward tokens equal to waste-kg * 10
+        (try! (mint-to caller (* waste-kg u10)))
 
-          (ok required-fee))
-        (err u401)))))
+        (ok required-fee))
+      err-not-registered)))
 
 ;; ---------------------------------------------
-;; Admin function: withdraw collected STX to project account
+;; Admin Function: Withdraw collected STX to project account
 ;; ---------------------------------------------
-(define-constant project-account 'ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM)
 
 (define-public (withdraw (amount uint))
   (begin
     ;; Only contract deployer can call
-    (asserts! (is-eq tx-sender (var-get contract-owner)) (err u403))
+    (asserts! (is-eq tx-sender (var-get contract-owner)) err-owner-only)
+    ;; Validate amount
+    (asserts! (> amount u0) err-invalid-amount)
     ;; Must have enough STX in contract
     (let ((balance (stx-get-balance (as-contract tx-sender))))
-      (asserts! (>= balance amount) (err u404)))
-    ;; Transfer
+      (asserts! (>= balance amount) err-insufficient-contract-balance))
+    ;; Transfer from contract to project account
     (try! (as-contract (stx-transfer? amount tx-sender project-account)))
     (ok amount)))
-
-;; ---------------------------------------------
-;; Utility: get contract owner
-;; ---------------------------------------------
-(define-read-only (get-contract-owner)
-  (var-get contract-owner))
