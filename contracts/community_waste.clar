@@ -1,6 +1,9 @@
 ;; Community Waste Collection Smart Contract
 ;; Implements SIP-010 fungible token standard for SUSTAIN tokens
 
+;; SIP-010 Trait Implementation
+;; Using a local trait definition for compatibility
+
 ;; Token constants
 (define-constant token-name "SUSTAIN Token")
 (define-constant token-symbol "SUSTAIN")
@@ -11,6 +14,11 @@
 (define-constant err-not-token-owner (err u101))
 (define-constant err-insufficient-balance (err u102))
 (define-constant err-invalid-amount (err u103))
+(define-constant err-already-registered (err u409))
+(define-constant err-not-registered (err u401))
+(define-constant err-insufficient-payment (err u402))
+(define-constant err-unauthorized (err u403))
+(define-constant err-not-found (err u404))
 
 ;; Data variables
 (define-data-var total-supply uint u0)
@@ -97,9 +105,9 @@
 
 ;; ---------------------------------------------
 ;; Report waste and pay STX
-;; - amount: amount of waste in kg (uint)
+;; - waste-kg: amount of waste in kg (uint)
 ;; - fee-per-kg: fee rate in micro-STX per kg
-;; STX must be attached
+;; STX must be attached via stx-transfer?
 ;; ---------------------------------------------
 (define-public (report-and-pay (waste-kg uint) (fee-per-kg uint))
   (let (
