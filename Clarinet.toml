@@ -4,7 +4,9 @@ description = ''
 authors = []
 telemetry = true
 cache_dir = './.cache'
-requirements = []
+requirements = [
+  "SP3FBR2AGK7NZX1M4YXYRSBNPK7EDD1XT31X7FYYP.sip-010-trait-ft-standard"
+]
 [contracts.community_waste]
 path = 'contracts/community_waste.clar'
 clarity_version = 3
