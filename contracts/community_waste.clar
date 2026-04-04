@@ -2,8 +2,8 @@
 ;; Implements SIP-010 fungible token standard for SUSTAIN tokens
 
 ;; Token constants
-(define-constant token-name "SUSTAIN Token")
-(define-constant token-symbol "SUSTAIN")
+(define-constant token-name (string-ascii 32 "SUSTAIN Token"))
+(define-constant token-symbol (string-ascii 7 "SUSTAIN"))
 (define-constant token-decimals u6)
 
 ;; Error constants
@@ -90,7 +90,8 @@
   (let ((caller tx-sender))
     (begin
       (match (map-get? households {address: caller})
-        some-entry (err u409)  ;; Already registered
+        some _ (err u409)  ;; Already registered
+        none
         (begin
           (map-set households {address: caller} {registered: true, waste-count: u0, paid-stx: u0})
           (ok true))))))
@@ -108,10 +109,11 @@
     (begin
       ;; Must be registered
       (match (map-get? households {address: caller})
-        entry
+        none (err u401)
+        some entry
         (begin
-          ;; Transfer STX payment to contract
-          (try! (stx-transfer? required-fee caller (as-contract tx-sender)))
+          ;; Check attached STX
+          (asserts! (>= (stx-get-spent) required-fee) (err u402))
 
           ;; Update household record
           (let (
@@ -127,8 +129,7 @@
           ;; Mint reward tokens equal to waste-kg * 10
           (try! (mint-to caller (* waste-kg u10)))
 
-          (ok required-fee))
-        (err u401)))))
+          (ok required-fee))))))
 
 ;; ---------------------------------------------
 ;; Admin function: withdraw collected STX to project account
@@ -140,10 +141,10 @@
     ;; Only contract deployer can call
     (asserts! (is-eq tx-sender (var-get contract-owner)) (err u403))
     ;; Must have enough STX in contract
-    (let ((balance (stx-get-balance (as-contract tx-sender))))
+    (let ((balance (stx-get-balance (as-contract))))
       (asserts! (>= balance amount) (err u404)))
     ;; Transfer
-    (try! (as-contract (stx-transfer? amount tx-sender project-account)))
+    (try! (stx-transfer? amount (as-contract) project-account))
     (ok amount)))
 
 ;; ---------------------------------------------
