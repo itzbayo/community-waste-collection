@@ -2,42 +2,47 @@
 ;; Implements SIP-010 fungible token standard for SUSTAIN tokens
 
 ;; Token constants
-(define-constant token-name "SUSTAIN Token")
-(define-constant token-symbol "SUSTAIN")
-(define-constant token-decimals u6)
+(define-constant TOKEN_NAME "SUSTAIN Token")
+(define-constant TOKEN_SYMBOL "SUSTAIN")
+(define-constant TOKEN_DECIMALS u6)
 
 ;; Error constants
-(define-constant err-owner-only (err u100))
-(define-constant err-not-token-owner (err u101))
-(define-constant err-insufficient-balance (err u102))
-(define-constant err-invalid-amount (err u103))
+(define-constant ERR_NOT_TOKEN_OWNER (err u101))
+(define-constant ERR_INSUFFICIENT_BALANCE (err u102))
+(define-constant ERR_INVALID_AMOUNT (err u103))
+(define-constant ERR_UNAUTHORIZED (err u403))
+
+(define-constant ERR_INSUFFICIENT_CONTRACT_BALANCE (err u404))
 
 ;; Data variables
 (define-data-var total-supply uint u0)
 (define-data-var total-waste-collected uint u0)
 (define-data-var total-stx-received uint u0)
-(define-data-var contract-owner principal tx-sender)
+(define-constant CONTRACT_OWNER tx-sender)
 
 ;; Maps
 (define-map token-balances principal uint)
 
 ;; Map each household to its info: registered, waste-count, paid-stx
 (define-map households
-  {address: principal}
-  {registered: bool, waste-count: uint, paid-stx: uint})
+  { address: principal }
+  { registered: bool, waste-count: uint, paid-stx: uint })
+
+;; Project account for withdrawals (devnet deployer)
+(define-constant PROJECT_ACCOUNT 'ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM)
 
 ;; ---------------------------------------------
 ;; SIP-010 Fungible Token Functions
 ;; ---------------------------------------------
 
 (define-read-only (get-name)
-  (ok token-name))
+  (ok TOKEN_NAME))
 
 (define-read-only (get-symbol)
-  (ok token-symbol))
+  (ok TOKEN_SYMBOL))
 
 (define-read-only (get-decimals)
-  (ok token-decimals))
+  (ok TOKEN_DECIMALS))
 
 (define-read-only (get-balance (who principal))
   (ok (default-to u0 (map-get? token-balances who))))
@@ -50,20 +55,20 @@
 
 (define-public (transfer (amount uint) (from principal) (to principal) (memo (optional (buff 34))))
   (begin
-    (asserts! (or (is-eq from tx-sender) (is-eq from contract-caller)) err-not-token-owner)
-    (asserts! (> amount u0) err-invalid-amount)
+    (asserts! (or (is-eq from tx-sender) (is-eq from contract-caller)) ERR_NOT_TOKEN_OWNER)
+    (asserts! (> amount u0) ERR_INVALID_AMOUNT)
     (let ((from-balance (default-to u0 (map-get? token-balances from))))
-      (asserts! (>= from-balance amount) err-insufficient-balance)
+      (asserts! (>= from-balance amount) ERR_INSUFFICIENT_BALANCE)
       (map-set token-balances from (- from-balance amount))
       (let ((to-balance (default-to u0 (map-get? token-balances to))))
         (map-set token-balances to (+ to-balance amount))))
-    (print memo)
+    (print { event: "transfer", sender: from, recipient: to, amount: amount, memo: memo })
     (ok true)))
 
 ;; Private function to mint tokens
 (define-private (mint-to (recipient principal) (amount uint))
   (begin
-    (asserts! (> amount u0) err-invalid-amount)
+    (asserts! (> amount u0) ERR_INVALID_AMOUNT)
     (let ((current-balance (default-to u0 (map-get? token-balances recipient))))
       (map-set token-balances recipient (+ current-balance amount))
       (var-set total-supply (+ (var-get total-supply) amount))
@@ -73,7 +78,7 @@
 ;; Public read-only getters
 ;; ---------------------------------------------
 (define-read-only (get-household-info (addr principal))
-  (match (map-get? households {address: addr})
+  (match (map-get? households { address: addr })
     entry (ok entry)
     (err u404)))
 
@@ -83,21 +88,23 @@
 (define-read-only (get-total-stx-received)
   (ok (var-get total-stx-received)))
 
+(define-read-only (get-contract-owner)
+  CONTRACT_OWNER)
+
 ;; ---------------------------------------------
 ;; Registration: add household to system
 ;; ---------------------------------------------
 (define-public (register-household)
   (let ((caller tx-sender))
-    (begin
-      (match (map-get? households {address: caller})
-        some-entry (err u409)  ;; Already registered
-        (begin
-          (map-set households {address: caller} {registered: true, waste-count: u0, paid-stx: u0})
-          (ok true))))))
+    (match (map-get? households { address: caller })
+      some-entry (err u409)
+      (begin
+        (map-set households { address: caller } { registered: true, waste-count: u0, paid-stx: u0 })
+        (ok true)))))
 
 ;; ---------------------------------------------
 ;; Report waste and pay STX
-;; - amount: amount of waste in kg (uint)
+;; - waste-kg: amount of waste in kg (uint)
 ;; - fee-per-kg: fee rate in micro-STX per kg
 ;; STX must be attached
 ;; ---------------------------------------------
@@ -106,8 +113,10 @@
         (caller tx-sender)
         (required-fee (* waste-kg fee-per-kg)))
     (begin
-      ;; Must be registered
-      (match (map-get? households {address: caller})
+      ;; Validate inputs
+      (asserts! (> waste-kg u0) ERR_INVALID_AMOUNT)
+      (asserts! (> fee-per-kg u0) ERR_INVALID_AMOUNT)
+      (match (map-get? households { address: caller })
         entry
         (begin
           ;; Transfer STX payment to contract
@@ -117,8 +126,8 @@
           (let (
                (new-waste (+ (get waste-count entry) waste-kg))
                (new-paid (+ (get paid-stx entry) required-fee)))
-            (map-set households {address: caller}
-                     {registered: true, waste-count: new-waste, paid-stx: new-paid}))
+            (map-set households { address: caller }
+                     { registered: true, waste-count: new-waste, paid-stx: new-paid }))
 
           ;; Update globals
           (var-set total-waste-collected (+ (var-get total-waste-collected) waste-kg))
@@ -133,21 +142,13 @@
 ;; ---------------------------------------------
 ;; Admin function: withdraw collected STX to project account
 ;; ---------------------------------------------
-(define-constant project-account 'ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM)
-
 (define-public (withdraw (amount uint))
   (begin
     ;; Only contract deployer can call
-    (asserts! (is-eq tx-sender (var-get contract-owner)) (err u403))
+    (asserts! (is-eq tx-sender CONTRACT_OWNER) ERR_UNAUTHORIZED)
     ;; Must have enough STX in contract
     (let ((balance (stx-get-balance (as-contract tx-sender))))
-      (asserts! (>= balance amount) (err u404)))
+      (asserts! (>= balance amount) ERR_INSUFFICIENT_CONTRACT_BALANCE))
     ;; Transfer
-    (try! (as-contract (stx-transfer? amount tx-sender project-account)))
+    (try! (as-contract (stx-transfer? amount tx-sender PROJECT_ACCOUNT)))
     (ok amount)))
-
-;; ---------------------------------------------
-;; Utility: get contract owner
-;; ---------------------------------------------
-(define-read-only (get-contract-owner)
-  (var-get contract-owner))
